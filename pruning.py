@@ -278,11 +278,4 @@ def main():
 
 
 
-#main()
-
-"""
-TO DO:
-    - implement pruning based on SNR
-    - research around masking, potential methods of masking
-
-"""
+main()
