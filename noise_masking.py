@@ -131,27 +131,33 @@ In this example, we're creating a binary mask for each layer of weights, where v
 if the corresponding weight is greater than the pruning threshold and 0 otherwise. 
 """
 
+
 def create_mask(params, prune_ratio):
     mask = {}
-    for layer_name, layer in params.items():
-        mask[layer_name] = {}
-        if 'w' in layer_name:
-            # Compute the threshold
-            threshold = jnp.percentile(jnp.abs(layer), prune_ratio * 100)
-
-            # Create a mask that is 1 where weights are greater than the threshold and 0 otherwise
-            mask[layer_name] = jnp.where(jnp.abs(layer) > threshold, 1, 0)
-
+    for layer, param_dict in params.items():
+        sub_mask = {}
+        for k, v in param_dict.items():
+            if 'w' in k:
+                # Compute the threshold
+                threshold = jnp.percentile(jnp.abs(v), prune_ratio * 100)
+                # Create a mask that is 1 where weights are greater than the threshold and 0 otherwise
+                sub_mask[k] = jnp.where(jnp.abs(v) > threshold, 1, 0)
+            else:
+                # For biases just create a mask of ones
+                sub_mask[k] = jnp.ones_like(v)
+        mask[layer] = sub_mask
     return mask
 
 def apply_mask(params, mask):
     pruned_params = {}
-    for layer_name, layer in params.items():
-        pruned_params[layer_name] = {}
-        if 'w' in layer_name:
-            pruned_params[layer_name] = layer * mask[layer_name]
-        else:
-            pruned_params[layer_name] = layer
+    for layer, param_dict in params.items():
+        layer_params = {}
+        for k, v in param_dict.items():
+            if 'w' in layer_name:
+                layer_param[k] = v * mask[layer][k]
+            else:
+                layer_param[k] = v
+        pruned_params[layer] = layer_param
     return pruned_params
 
 
@@ -186,29 +192,36 @@ def add_noise(params, noise_type = 'normal', std_dev=0.05, noise_ratio=0.1, scal
     Poisson noise is integer-valued and thus may not be suitable for all tasks.
     
     """
+    rng = jax.random.PRNGKey(0)
     params_noisy = {}
+    
+    for layer, param_dict in params.items():
+        layer_params = {}
+        for k, v in param_dict.items():
+            if 'w' in k:
+                weights = v
+                rng, subkey = jax.random.split(rng)
+                noise_mask = jax.random.bernoulli(subkey, noise_ratio, weights.shape)
+                rng, subkey = jax.random.split(rng)
 
-    for layer_name, layer_params in params.items():
-        if 'w' in layer_name:
-            weights = layer_params
-            noise_mask = jax.random.bernoulli(jax.random.PRNGKey(0), noise_ratio, weights.shape)
-            if noise_type == "normal":
-                noise_values = jax.random.normal(jax.random.PRNGKey(0), shape = weights.shape) * std_dev
-            elif noise_type == "uniform":
-                noise_values = jax.random.uniform(jax.random.PRNGKey(0), shape = weights.shape, minval=-scale, maxval=scale) 
-            elif noise_type == "laplace":
-                noise_values = jax.random.laplace(jax.random.PRNGKey(0), shape = weights.shape) * scale
-            elif noise_type == "bernoulli":
-                noise_values = jax.random.bernoulli(jax.random.PRNGKey(0), p=0.5, shape = weights.shape) * scale
-            elif noise_type == "cauchy":
-                noise_values = jax.random.cauchy(jax.random.PRNGKey(0), shape = weights.shape) * scale
-            elif noise_type == "poisson":
-                noise_values = jax.random.poisson(jax.random.PRNGKey(0), lam=lam, shape = weights.shape)
+                if noise_type == "normal":
+                    noise_values = jax.random.normal(subkey, shape = weights.shape) * std_dev
+                elif noise_type == "uniform":
+                    noise_values = jax.random.uniform(subkey, shape = weights.shape, minval=-scale, maxval=scale) 
+                elif noise_type == "laplace":
+                    noise_values = jax.random.laplace(subkey, shape = weights.shape) * scale
+                elif noise_type == "bernoulli":
+                    noise_values = jax.random.bernoulli(subkey, p=0.5, shape = weights.shape) * scale
+                elif noise_type == "cauchy":
+                    noise_values = jax.random.cauchy(subkey, shape = weights.shape) * scale
+                elif noise_type == "poisson":
+                    noise_values = jax.random.poisson(subkey, lam=lam, shape = weights.shape)
             
-            weights_noisy = jnp.where(noise_mask, weights + noise_values, weights)
-            params_noisy[layer_name] = weights_noisy
-        else:
-            params_noisy[layer_name] = layer
+                weights_noisy = jnp.where(noise_mask, weights + noise_values, weights)
+                layer_params[k] = weights_noisy
+            else:
+                layer_params[k] = v
+        params_noisy[layer] = layer_params
     return params_noisy
 
 
